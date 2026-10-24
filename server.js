@@ -68,7 +68,7 @@ async function fetchAllPasswords() {
 // ======================================================================
 
 // 1. GET /report/all - Primary data fetch for the dashboard
-app.get('/api/report/all', async (req, res) =&gt; {
+app.get('/api/report/all', async (req, res) => {
     try {
         // This function executes the intensive scraping logic
         const passwords = await fetchAllPasswords(); 
@@ -80,7 +80,7 @@ app.get('/api/report/all', async (req, res) =&gt; {
 });
 
 // 2. POST /api/notify/telegram
-app.post('/api/notify/telegram', async (req, res) =&gt; {
+app.post('/api/notify/telegram', async (req, res) => {
     if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
         return res.status(500).json({ message: 'Configuration Error: Telegram credentials missing.' });
     }
