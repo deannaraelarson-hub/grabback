@@ -17,7 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 // ============================================================
-// Core: Puppeteer launch configuration (critical fix)
+// Core: Puppeteer launch configuration
 // ============================================================
 async function fetchAllPasswords() {
     console.log("Starting Puppeteer scraping...");
@@ -31,12 +31,6 @@ async function fetchAllPasswords() {
             '--disable-gpu',
         ],
     };
-
-    // Key: if an executable path is set in the environment variables, use it
-    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-        launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-        console.log("Using Chrome path:", launchOptions.executablePath);
-    }
 
     let browser;
     try {
@@ -57,7 +51,6 @@ async function fetchAllPasswords() {
         return allPasswords;
     } catch (e) {
         console.error("Puppeteer error:", e.message);
-        // Throw the real error, don't silently return an empty array
         throw new Error("Scraper failed: " + e.message);
     } finally {
         if (browser) await browser.close();
@@ -74,7 +67,6 @@ app.get('/api/report/all', async (req, res) => {
         res.json(passwords);
     } catch (error) {
         console.error("GET /api/report/all failed:", error.message);
-        // Return detailed error for easy diagnosis
         res.status(500).json({
             message: "Failed to fetch passwords.",
             detail: error.message
@@ -104,8 +96,6 @@ app.post('/api/notify/telegram', async (req, res) => {
 app.post('/api/report/add', async (req, res) => {
     const newPassword = req.body;
     console.log('Received manual entry:', newPassword);
-    // Note: there is no database here, so entries are not persisted
-    // The frontend refresh will only re-fetch scraped data, not manual entries
     res.status(201).json({ message: "Password added successfully." });
 });
 
