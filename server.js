@@ -24,6 +24,7 @@ async function fetchAllPasswords() {
 
     const launchOptions = {
         headless: 'new',
+        executablePath: '/usr/bin/chromium',
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
