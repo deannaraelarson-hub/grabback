@@ -8,98 +8,116 @@ const PORT = process.env.PORT || 3000;
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const CHROME_PATH = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
+const SCRAPE_TIMEOUT_MS = parseInt(process.env.SCRAPE_TIMEOUT_MS || '45000', 10);
 
 if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.error("FATAL ERROR: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not set.");
+    console.error("FATAL: Telegram credentials missing.");
 }
 
 app.use(cors());
 app.use(express.json());
 
-// ============================================================
-// Core: Puppeteer launch configuration
-// ============================================================
-async function fetchAllPasswords() {
-    console.log("Starting Puppeteer scraping...");
+// In-memory manual entries (replace with DB later)
+const manualEntries = [];
 
-    const launchOptions = {
+async function fetchScrapedData() {
+    console.log("Launching Puppeteer...");
+    const browser = await puppeteer.launch({
         headless: 'new',
-        executablePath: '/usr/bin/chromium',
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-        ],
-    };
+        executablePath: CHROME_PATH,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+        timeout: SCRAPE_TIMEOUT_MS,
+    });
 
-    let browser;
+    const page = await browser.newPage();
+    page.setDefaultNavigationTimeout(SCRAPE_TIMEOUT_MS);
+    const results = [];
+
+    // These are pages Puppeteer can actually visit and extract visible text from
+    const targets = [
+        { name: 'WhatsApp Web', url: 'https://web.whatsapp.com/' },
+        { name: 'Facebook Login', url: 'https://www.facebook.com/login' },
+        { name: 'Google Accounts', url: 'https://accounts.google.com/' },
+    ];
+
     try {
-        browser = await puppeteer.launch(launchOptions);
-        const page = await browser.newPage();
-        const allPasswords = [];
+        for (const t of targets) {
+            try {
+                console.log(`Visiting ${t.name}: ${t.url}`);
+                await page.goto(t.url, { waitUntil: 'domcontentloaded' });
 
-        // --- Your original scraping logic (keeping the placeholders) ---
-        await page.goto('https://web.whatsapp.com/shortcuts', { waitUntil: 'networkidle2' });
-        allPasswords.push({ serviceName: 'Chrome Profile', username: 'local_user', password: 'ScrapedPass_Chrome', source: 'Browser DB/WA' });
+                // Extract visible text on the page (limited to 200 characters)
+                const visibleText = await page.evaluate(() => {
+                    const body = document.body;
+                    if (!body) return '(empty page)';
+                    return body.innerText.replace(/\s+/g, ' ').trim().slice(0, 200);
+                });
 
-        await page.goto('https://www.facebook.com/login');
-        allPasswords.push({ serviceName: 'Facebook', username: 'FB_Scrape', password: 'FB_Scraped_Pass', source: 'Facebook Web Scrape' });
-
-        allPasswords.push({ serviceName: 'Gmail', username: 'Gmail_API', password: 'Gmail_Scraped_Pass', source: 'Gmail API' });
-
-        console.log(`Scraping complete. Found ${allPasswords.length} records.`);
-        return allPasswords;
-    } catch (e) {
-        console.error("Puppeteer error:", e.message);
-        throw new Error("Scraper failed: " + e.message);
+                results.push({
+                    serviceName: t.name,
+                    username: '(see page text)',
+                    password: '(not accessible)',
+                    source: `Page text: ${visibleText || '(blank)'}`,
+                });
+                console.log(`✓ ${t.name} extracted ${visibleText.length} chars`);
+            } catch (err) {
+                console.error(`✗ ${t.name} failed: ${err.message}`);
+                results.push({
+                    serviceName: t.name,
+                    username: '—',
+                    password: '—',
+                    source: `Error: ${err.message}`,
+                });
+            }
+        }
     } finally {
-        if (browser) await browser.close();
+        await browser.close();
     }
-}
 
-// ============================================================
-// API endpoints
-// ============================================================
+    return results;
+}
 
 app.get('/api/report/all', async (req, res) => {
     try {
-        const passwords = await fetchAllPasswords();
-        res.json(passwords);
+        const scraped = await fetchScrapedData();
+        res.json([...scraped, ...manualEntries]);
     } catch (error) {
-        console.error("GET /api/report/all failed:", error.message);
-        res.status(500).json({
-            message: "Failed to fetch passwords.",
-            detail: error.message
-        });
+        console.error("GET failed:", error.message);
+        res.status(500).json({ message: 'Failed to fetch.', detail: error.message });
     }
 });
 
 app.post('/api/notify/telegram', async (req, res) => {
     if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-        return res.status(500).json({ message: 'Configuration Error: Telegram credentials missing.' });
+        return res.status(500).json({ message: 'Telegram credentials missing.' });
     }
     try {
-        const message = "🔔 New Password Dump Available! Check the Dashboard!";
-        const telegramUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-        await axios.post(telegramUrl, {
-            chat_id: TELEGRAM_CHAT_ID,
-            text: message,
-            parse_mode: 'HTML'
-        });
-        res.status(200).json({ message: 'Notification successfully triggered.' });
+        await axios.post(
+            `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+            { chat_id: TELEGRAM_CHAT_ID, text: '🔔 Dashboard report ready.', parse_mode: 'HTML' },
+            { timeout: 15000 }
+        );
+        res.json({ message: 'Notification sent.' });
     } catch (error) {
-        console.error("Telegram error:", error.response ? error.response.data : error.message);
+        console.error('Telegram error:', error.response?.data || error.message);
         res.status(500).json({ message: 'Failed to send Telegram notification.' });
     }
 });
 
-app.post('/api/report/add', async (req, res) => {
-    const newPassword = req.body;
-    console.log('Received manual entry:', newPassword);
-    res.status(201).json({ message: "Password added successfully." });
+app.post('/api/report/add', (req, res) => {
+    const { serviceName, username, password, source } = req.body || {};
+    if (!serviceName || !username || !password) {
+        return res.status(400).json({ message: 'serviceName, username, password required.' });
+    }
+    const entry = {
+        serviceName: String(serviceName).slice(0, 200),
+        username: String(username).slice(0, 200),
+        password: String(password).slice(0, 500),
+        source: String(source || 'manual').slice(0, 100),
+    };
+    manualEntries.push(entry);
+    res.status(201).json({ message: 'Added.', entry });
 });
 
-app.listen(PORT, () => {
-    console.log(`✅ Backend API running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`✅ Backend on port ${PORT}`));
